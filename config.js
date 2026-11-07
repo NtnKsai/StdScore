@@ -4,5 +4,5 @@
  */
 window.APP_CONFIG = {
   GOOGLE_CLIENT_ID: "ใส่_WEB_CLIENT_ID.apps.googleusercontent.com",
-  API_URL: "https://script.google.com/macros/s/ใส่_DEPLOYMENT_ID/exec"
+  API_URL: "https://script.google.com/macros/s/AKfycbzk05CirlaT839DjPMq-Z3Jxxv_-UUkLo-oP5TQB2iHOaNlgxfH5PtqE4vW3D5RBM6o/exec"
 };
