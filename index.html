@@ -1,1 +1,151 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#173f70" />
+  <meta name="description" content="ระบบจัดการรายชื่อนักเรียน โรงเรียนวัดแคทราย(บุญประชาสรรค์)" />
+  <title>Student List Manager | NtnKsai</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
+  <main id="login-screen" class="login-screen">
+    <section class="login-card">
+      <div class="brand-mark"><span class="brand-icon">SL</span></div>
+      <p class="eyebrow">STUDENT MANAGEMENT SYSTEM</p>
+      <h1>Student List Manager</h1>
+      <p class="login-subtitle">ระบบจัดการรายชื่อนักเรียน</p>
+      <div class="school-line">โรงเรียนวัดแคทราย(บุญประชาสรรค์)</div>
+      <div class="login-divider"></div>
+      <p class="login-instruction">เข้าสู่ระบบด้วยบัญชี Google ที่ได้รับอนุญาตจากผู้ดูแล</p>
+      <div id="google-signin" class="google-signin"></div>
+      <p id="login-status" class="status-message" role="status">กำลังเตรียมระบบเข้าสู่ระบบ…</p>
+      <div class="login-note"><span class="lock-symbol">●</span> ข้อมูลนักเรียนสำหรับผู้มีสิทธิ์เท่านั้น</div>
+    </section>
+    <footer class="login-footer">พัฒนาโดย <strong>NtnKsai</strong> · โรงเรียนวัดแคทราย(บุญประชาสรรค์)</footer>
+  </main>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-icon small">SL</span>
+        <div><strong>Student List</strong><small>Manager</small></div>
+      </div>
+      <nav class="main-nav" aria-label="เมนูหลัก">
+        <button class="nav-link active" data-view="dashboard"><span class="nav-icon">▦</span> ภาพรวม</button>
+        <button class="nav-link" data-view="students"><span class="nav-icon">♙</span> รายชื่อนักเรียน</button>
+        <button class="nav-link" data-view="classrooms"><span class="nav-icon">▤</span> จัดการห้องเรียน</button>
+        <button class="nav-link" data-view="settings"><span class="nav-icon">⚙</span> ตั้งค่าระบบ</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-school">โรงเรียนวัดแคทราย<br />(บุญประชาสรรค์)</div>
+        <div class="sidebar-credit">พัฒนาโดย <strong>NtnKsai</strong></div>
+      </div>
+    </aside>
+
+    <section class="main-area">
+      <header class="topbar">
+        <button id="menu-toggle" class="icon-button menu-toggle" aria-label="เปิดเมนู">☰</button>
+        <div class="breadcrumb"><span>ระบบจัดการข้อมูล</span><b>/</b><strong id="page-heading">ภาพรวม</strong></div>
+        <div class="user-area">
+          <span class="online-dot"></span>
+          <span id="user-email" class="user-email">ผู้ใช้งาน</span>
+          <button id="logout-button" class="button button-light button-small">ออกจากระบบ</button>
+        </div>
+      </header>
+
+      <div class="content-wrap">
+        <section id="view-dashboard" class="view-section">
+          <div class="page-intro">
+            <div><p class="eyebrow">OVERVIEW</p><h1>ภาพรวมระบบ</h1><p>สรุปข้อมูลนักเรียนและห้องเรียนในฐานข้อมูล</p></div>
+            <button class="button button-primary" data-action="go-add-student">＋ เพิ่มนักเรียน</button>
+          </div>
+          <div class="stats-grid">
+            <article class="stat-card"><div class="stat-icon blue">♙</div><div><span>นักเรียนทั้งหมด</span><strong id="stat-students">0</strong><small>คน</small></div></article>
+            <article class="stat-card"><div class="stat-icon teal">▤</div><div><span>ห้องเรียนทั้งหมด</span><strong id="stat-rooms">0</strong><small>ห้อง</small></div></article>
+            <article class="stat-card"><div class="stat-icon orange">▣</div><div><span>ห้องที่มีนักเรียน</span><strong id="stat-active-rooms">0</strong><small>ห้อง</small></div></article>
+          </div>
+          <div class="dashboard-grid">
+            <section class="panel">
+              <div class="panel-heading"><div><h2>จำนวนนักเรียนรายห้อง</h2><p>ข้อมูลล่าสุดจาก Google Sheets</p></div><button class="text-button" data-view-link="students">ดูรายชื่อทั้งหมด →</button></div>
+              <div id="room-summary" class="room-summary"><div class="empty-state compact">ยังไม่มีข้อมูลห้องเรียน</div></div>
+            </section>
+            <section class="panel quick-panel">
+              <div class="panel-heading"><div><h2>เมนูด่วน</h2><p>งานที่ใช้งานบ่อย</p></div></div>
+              <button class="quick-action" data-action="go-add-student"><span>＋</span><div><strong>เพิ่มนักเรียน</strong><small>เพิ่มข้อมูลนักเรียนใหม่เข้าระบบ</small></div><b>›</b></button>
+              <button class="quick-action" data-view-link="classrooms"><span>▤</span><div><strong>จัดการห้องเรียน</strong><small>เพิ่ม แก้ไข หรือลบห้องเรียน</small></div><b>›</b></button>
+              <button class="quick-action" data-view-link="students"><span>⇩</span><div><strong>ส่งออกรายชื่อ</strong><small>ดาวน์โหลดข้อมูลตามตัวกรอง</small></div><b>›</b></button>
+            </section>
+          </div>
+        </section>
+
+        <section id="view-students" class="view-section hidden">
+          <div class="page-intro">
+            <div><p class="eyebrow">STUDENT DIRECTORY</p><h1>รายชื่อนักเรียน</h1><p>จัดการ ค้นหา และกำหนดรูปแบบการแสดงรายชื่อนักเรียน</p></div>
+            <div class="intro-actions"><button class="button button-outline" id="import-csv-button">⇧ นำเข้า CSV</button><button class="button button-primary" data-action="go-add-student">＋ เพิ่มนักเรียน</button><input id="csv-file" type="file" accept=".csv,text/csv" class="hidden" /></div>
+          </div>
+          <section class="panel directory-panel">
+            <div class="filter-grid">
+              <label class="field search-field"><span>ค้นหานักเรียน</span><div class="input-with-icon"><span>⌕</span><input id="student-search" type="search" placeholder="ค้นหาชื่อ นามสกุล หรือชื่อเล่น…" /></div></label>
+              <div class="field"><span>ห้องเรียนที่ต้องการแสดง</span><div id="room-filter-list" class="room-filter-list"></div><div class="filter-actions"><button class="text-button" id="select-all-rooms">เลือกทุกห้อง</button><button class="text-button" id="clear-rooms">ล้างการเลือก</button></div></div>
+            </div>
+            <div class="column-control">
+              <div><strong>เลือกคอลัมน์ที่ต้องการแสดง</strong><small>เปลี่ยนการแสดงผลได้ทันที</small></div>
+              <div id="column-options" class="column-options">
+                <label><input type="checkbox" value="number" checked /> เลขที่</label>
+                <label><input type="checkbox" value="firstName" checked /> ชื่อ</label>
+                <label><input type="checkbox" value="lastName" checked /> นามสกุล</label>
+                <label><input type="checkbox" value="nickname" checked /> ชื่อเล่น</label>
+                <label><input type="checkbox" value="classroom" /> ห้องเรียน</label>
+              </div>
+            </div>
+            <div class="table-toolbar"><div><strong id="result-count">0 รายการ</strong><span id="selected-room-label" class="muted-text">ทุกห้องเรียน</span></div><div class="toolbar-actions"><label class="per-page">เรียงตาม <select id="sort-by"><option value="number">เลขที่</option><option value="firstName">ชื่อ</option><option value="lastName">นามสกุล</option><option value="nickname">ชื่อเล่น</option></select></label><label class="per-page">แสดง <select id="page-size"><option value="25">25</option><option value="50">50</option><option value="100">100</option><option value="all">ทั้งหมด</option></select> รายการ</label><button class="button button-light button-small" id="copy-list-button">คัดลอกรายชื่อ</button><button class="button button-light button-small" id="export-csv-button">ดาวน์โหลด CSV</button><button class="button button-light button-small" id="print-list-button">พิมพ์</button></div></div>
+            <div class="table-wrap"><table class="data-table"><thead id="students-thead"></thead><tbody id="students-tbody"></tbody></table></div>
+            <div id="table-empty" class="empty-state hidden"><div class="empty-icon">♙</div><strong>ไม่พบข้อมูลนักเรียน</strong><p>ลองเปลี่ยนตัวกรอง หรือเพิ่มรายชื่อนักเรียน</p></div>
+            <div class="table-footer"><span id="table-range">แสดง 0 รายการ</span><div class="pagination"><button id="prev-page" class="button button-light button-small" disabled>ก่อนหน้า</button><span id="page-indicator">1 / 1</span><button id="next-page" class="button button-light button-small" disabled>ถัดไป</button></div></div>
+          </section>
+          <p class="data-note">ข้อมูลนี้ดึงจาก Google Sheets ตามสิทธิ์ของบัญชีที่เข้าสู่ระบบ</p>
+        </section>
+
+        <section id="view-classrooms" class="view-section hidden">
+          <div class="page-intro"><div><p class="eyebrow">CLASSROOMS</p><h1>จัดการห้องเรียน</h1><p>เพิ่ม แก้ไข และลบห้องเรียนในระบบ</p></div><button class="button button-primary" id="add-classroom-button">＋ เพิ่มห้องเรียน</button></div>
+          <section class="panel"><div class="panel-heading"><div><h2>ห้องเรียนทั้งหมด</h2><p>ไม่สามารถลบห้องเรียนที่ยังมีนักเรียนอยู่ได้</p></div><span id="classroom-count" class="count-pill">0 ห้อง</span></div><div id="classroom-cards" class="classroom-grid"></div></section>
+        </section>
+
+        <section id="view-settings" class="view-section hidden">
+          <div class="page-intro"><div><p class="eyebrow">SYSTEM SETTINGS</p><h1>ตั้งค่าระบบ</h1><p>ข้อมูลระบบและการเชื่อมต่อ</p></div></div>
+          <div class="settings-grid">
+            <section class="panel"><h2>ข้อมูลระบบ</h2><dl class="settings-list"><div><dt>ชื่อระบบ</dt><dd>Student List Manager</dd></div><div><dt>ผู้พัฒนา</dt><dd>NtnKsai</dd></div><div><dt>หน่วยงาน</dt><dd>โรงเรียนวัดแคทราย(บุญประชาสรรค์)</dd></div><div><dt>ฐานข้อมูล</dt><dd>Google Sheets</dd></div><div><dt>เว็บไซต์</dt><dd>GitHub Pages</dd></div></dl></section>
+            <section class="panel"><h2>สถานะการเชื่อมต่อ</h2><div class="connection-status"><span class="connection-dot"></span><div><strong>เชื่อมต่อฐานข้อมูลแล้ว</strong><small id="last-sync">กำลังโหลดข้อมูล…</small></div></div><button id="refresh-data-button" class="button button-outline full-width">↻ โหลดข้อมูลใหม่</button><p class="help-text">หากแก้ไขข้อมูลโดยตรงใน Google Sheets ให้กดโหลดข้อมูลใหม่เพื่ออัปเดตหน้าเว็บ</p></section>
+          </div>
+          <section class="panel api-panel"><div class="panel-heading"><div><h2>การต่อยอดและส่งออกข้อมูล</h2><p>เตรียมข้อมูลสำหรับนำไปใช้กับเครื่องมืออื่น</p></div></div><p>เว็บไซต์มี API ฝั่ง Google Apps Script สำหรับเรียกดูและจัดการข้อมูล โดยทุกคำขอต้องผ่านการตรวจสอบบัญชี Google และอีเมลที่ได้รับอนุญาต</p><button class="button button-light" id="download-template-button">ดาวน์โหลดไฟล์ตัวอย่าง CSV</button></section>
+          <div class="developer-footer">Student List Manager · พัฒนาโดย <strong>NtnKsai</strong> · โรงเรียนวัดแคทราย(บุญประชาสรรค์)</div>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <div id="student-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="student-modal-title">
+    <div class="modal-card"><div class="modal-heading"><div><p class="eyebrow">STUDENT INFORMATION</p><h2 id="student-modal-title">เพิ่มนักเรียน</h2></div><button class="icon-button" data-close-modal="student-modal" aria-label="ปิด">×</button></div>
+      <form id="student-form"><input id="student-id" type="hidden" /><div class="form-grid"><label class="field"><span>ห้องเรียน <i>*</i></span><select id="student-classroom" required></select></label><label class="field"><span>เลขที่ <i>*</i></span><input id="student-number" maxlength="12" required placeholder="เช่น 1" /></label><label class="field"><span>ชื่อ <i>*</i></span><input id="student-firstname" maxlength="100" required placeholder="ชื่อจริง" /></label><label class="field"><span>นามสกุล</span><input id="student-lastname" maxlength="100" placeholder="นามสกุล" /></label><label class="field full-span"><span>ชื่อเล่น</span><input id="student-nickname" maxlength="60" placeholder="ชื่อเล่น" /></label></div><div class="form-error" id="student-form-error"></div><div class="modal-actions"><button type="button" class="button button-light" data-close-modal="student-modal">ยกเลิก</button><button type="submit" class="button button-primary" id="save-student-button">บันทึกข้อมูล</button></div></form>
+    </div>
+  </div>
+
+  <div id="classroom-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="classroom-modal-title">
+    <div class="modal-card modal-card-narrow"><div class="modal-heading"><div><p class="eyebrow">CLASSROOM INFORMATION</p><h2 id="classroom-modal-title">เพิ่มห้องเรียน</h2></div><button class="icon-button" data-close-modal="classroom-modal" aria-label="ปิด">×</button></div>
+      <form id="classroom-form"><input id="classroom-id" type="hidden" /><label class="field"><span>ชื่อห้องเรียน <i>*</i></span><input id="classroom-name" maxlength="40" required placeholder="เช่น ป.1/1" /></label><div class="form-error" id="classroom-form-error"></div><div class="modal-actions"><button type="button" class="button button-light" data-close-modal="classroom-modal">ยกเลิก</button><button type="submit" class="button button-primary" id="save-classroom-button">บันทึก</button></div></form>
+    </div>
+  </div>
+
+  <div id="confirm-modal" class="modal-backdrop hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><div class="modal-card modal-card-narrow confirm-card"><div class="confirm-icon">!</div><h2 id="confirm-title">ยืนยันการลบ</h2><p id="confirm-message">ต้องการลบรายการนี้หรือไม่</p><div class="modal-actions"><button class="button button-light" data-close-modal="confirm-modal">ยกเลิก</button><button id="confirm-delete-button" class="button button-danger">ยืนยันลบ</button></div></div></div>
+
+  <div id="print-area" class="print-area"></div>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

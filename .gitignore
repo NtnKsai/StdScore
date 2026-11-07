@@ -1,0 +1,7 @@
+# Never commit exported student data, local backups, or environment secrets
+*.xlsx
+*.xls
+*.csv
+.env
+.env.*
+.DS_Store
