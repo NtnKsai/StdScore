@@ -1,4 +1,4 @@
-/* Student List Manager - NtnKsai
+/* Student List Manager V1.2 - NtnKsai
  * Frontend: GitHub Pages | Auth: Google Identity Services | API: Apps Script
  */
 (() => {
@@ -119,50 +119,71 @@
     return CONFIG.API_URL;
   }
 
-  function apiGet(action, params = {}) {
+  // Apps Script ContentService redirects responses to script.googleusercontent.com.
+  // JSONP remains the transport for GET requests because a normal cross-origin
+  // fetch cannot reliably read Apps Script responses from GitHub Pages.
+  function jsonpRequest(action, params = {}, timeoutMs = 20000) {
     return new Promise((resolve, reject) => {
-      if (!idToken) return reject(new Error('กรุณาเข้าสู่ระบบใหม่อีกครั้ง'));
-      let callbackName = `slm_jsonp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const callbackName = `slm_jsonp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const script = document.createElement('script');
-      const query = new URLSearchParams({ action, token: idToken, callback: callbackName, ...params });
+      const query = new URLSearchParams({ action, callback: callbackName, ...params, _slm: String(Date.now()) });
       let settled = false;
+      let callbackCalled = false;
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        delete window[callbackName];
+        script.onerror = null;
+        script.onload = null;
+        script.remove();
+      };
       const finish = (fn, value) => {
         if (settled) return;
         settled = true;
-        window.clearTimeout(timeout);
-        delete window[callbackName];
-        script.remove();
+        cleanup();
         fn(value);
       };
-      window[callbackName] = data => finish(resolve, data);
-      script.onerror = () => finish(reject, new Error('เชื่อมต่อ Google Apps Script ไม่สำเร็จ กรุณาตรวจสอบ URL และสิทธิ์การเผยแพร่'));
-      const timeout = window.setTimeout(() => finish(reject, new Error('หมดเวลารอการตอบกลับจากฐานข้อมูล')), 30000);
+      window[callbackName] = data => {
+        callbackCalled = true;
+        finish(resolve, data);
+      };
+      script.async = true;
+      script.referrerPolicy = 'strict-origin-when-cross-origin';
+      script.onerror = () => finish(reject, new Error('โหลดคำตอบจาก Google Apps Script ไม่สำเร็จ (JSONP/network). ตรวจสอบการ Redirect, URL และการเผยแพร่ Web App'));
+      script.onload = () => {
+        // A successful script load should invoke the JSONP callback. If it does
+        // not, the endpoint may have returned HTML/login content instead of JS.
+        if (!callbackCalled) {
+          window.setTimeout(() => {
+            if (!settled && !callbackCalled) finish(reject, new Error('Google Apps Script ตอบกลับมาแต่ไม่พบ JSONP callback (อาจถูก Redirect ไปหน้า HTML หรือสิทธิ์ไม่ตรง)'));
+          }, 250);
+        }
+      };
+      const timeout = window.setTimeout(() => finish(reject, new Error('หมดเวลารอ Google Apps Script (' + Math.round(timeoutMs / 1000) + ' วินาที) กรุณาลองใหม่')) , timeoutMs);
       script.src = `${apiUrl()}?${query.toString()}`;
       document.head.appendChild(script);
     });
   }
 
-  function apiGetPhoto(ticket) {
-    return new Promise((resolve, reject) => {
-      if (!/^[a-f0-9-]{36}$/i.test(String(ticket || ''))) return reject(new Error('รหัสเรียกดูรูปภาพไม่ถูกต้อง'));
-      const callbackName = `slm_photo_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const script = document.createElement('script');
-      const query = new URLSearchParams({ action: 'getStudentPhoto', ticket, callback: callbackName });
-      let settled = false;
-      const finish = (fn, value) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeout);
-        delete window[callbackName];
-        script.remove();
-        fn(value);
-      };
-      window[callbackName] = data => finish(resolve, data);
-      script.onerror = () => finish(reject, new Error('เรียกดูรูปภาพจาก Google Drive ไม่สำเร็จ'));
-      const timeout = window.setTimeout(() => finish(reject, new Error('หมดเวลารอรูปภาพ')), 30000);
-      script.src = `${apiUrl()}?${query.toString()}`;
-      document.head.appendChild(script);
-    });
+  async function apiGet(action, params = {}) {
+    if (!idToken) throw new Error('กรุณาเข้าสู่ระบบใหม่อีกครั้ง');
+    let lastError;
+    // Retry transient mobile-network / Apps Script redirect failures once with
+    // a fresh JSONP callback and cache-busting query parameter.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await jsonpRequest(action, { token: idToken, ...params }, attempt === 0 ? 20000 : 25000);
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await new Promise(resolve => window.setTimeout(resolve, 700));
+      }
+    }
+    if (navigator.onLine === false) throw new Error('อุปกรณ์ไม่มีการเชื่อมต่ออินเทอร์เน็ต กรุณาตรวจสอบเครือข่ายมือถือหรือ Wi-Fi');
+    throw lastError || new Error('เชื่อมต่อ Google Apps Script ไม่สำเร็จ');
+  }
+
+  async function apiGetPhoto(ticket) {
+    if (!/^[a-f0-9-]{36}$/i.test(String(ticket || ''))) throw new Error('รหัสเรียกดูรูปภาพไม่ถูกต้อง');
+    return jsonpRequest('getStudentPhoto', { ticket }, 25000);
   }
 
   async function apiPost(action, payload = {}) {
