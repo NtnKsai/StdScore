@@ -16,6 +16,19 @@
   let pageSize = 25;
   let pendingDelete = null;
   let gisReady = false;
+  let filterPhotoOnly = false;
+  let pendingPhotoBase64 = '';
+  let pendingPhotoMimeType = '';
+  let editingPhotoFileId = '';
+  let removeExistingPhoto = false;
+  let detailStudentId = '';
+  const photoCache = new Map();
+  const photoPending = new Map();
+  const photoTaskQueue = [];
+  const photoTicketQueue = [];
+  let photoTicketFlushScheduled = false;
+  let activePhotoTasks = 0;
+  let sessionEpoch = 0;
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -129,6 +142,29 @@
     });
   }
 
+  function apiGetPhoto(ticket) {
+    return new Promise((resolve, reject) => {
+      if (!/^[a-f0-9-]{36}$/i.test(String(ticket || ''))) return reject(new Error('รหัสเรียกดูรูปภาพไม่ถูกต้อง'));
+      const callbackName = `slm_photo_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const script = document.createElement('script');
+      const query = new URLSearchParams({ action: 'getStudentPhoto', ticket, callback: callbackName });
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        delete window[callbackName];
+        script.remove();
+        fn(value);
+      };
+      window[callbackName] = data => finish(resolve, data);
+      script.onerror = () => finish(reject, new Error('เรียกดูรูปภาพจาก Google Drive ไม่สำเร็จ'));
+      const timeout = window.setTimeout(() => finish(reject, new Error('หมดเวลารอรูปภาพ')), 30000);
+      script.src = `${apiUrl()}?${query.toString()}`;
+      document.head.appendChild(script);
+    });
+  }
+
   async function apiPost(action, payload = {}) {
     if (!idToken) throw new Error('กรุณาเข้าสู่ระบบใหม่อีกครั้ง');
     const nonce = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -229,7 +265,7 @@
       const roomMatches = selectedRooms.has(student.classroomId);
       const roomName = classrooms.find(room => room.id === student.classroomId)?.name || '';
       const searchable = [student.number, student.firstName, student.lastName, student.nickname, roomName].join(' ').toLocaleLowerCase('th-TH');
-      return roomMatches && (!search || searchable.includes(search));
+      return roomMatches && (!filterPhotoOnly || Boolean(student.photoFileId)) && (!search || searchable.includes(search));
     }).sort((a, b) => {
       const roomA = classrooms.find(room => room.id === a.classroomId)?.name || '';
       const roomB = classrooms.find(room => room.id === b.classroomId)?.name || '';
@@ -251,11 +287,14 @@
     const start = (currentPage - 1) * size;
     const rows = filtered.slice(start, start + size);
     $('#result-count').textContent = `${filtered.length.toLocaleString('th-TH')} รายการ`;
-    $('#students-thead').innerHTML = `<tr>${columns.map(key => `<th>${LABELS[key]}</th>`).join('')}<th>จัดการ</th></tr>`;
-    $('#students-tbody').innerHTML = rows.map(student => `<tr>${columns.map(key => {
+    $('#students-thead').innerHTML = `<tr><th class="photo-column">รูป</th>${columns.map(key => `<th>${LABELS[key]}</th>`).join('')}<th>จัดการ</th></tr>`;
+    $('#students-tbody').innerHTML = rows.map(student => `<tr><td class="photo-column">${student.photoFileId
+      ? `<button class="avatar-button" data-view-student="${escapeHtml(student.id)}" title="ดูข้อมูลนักเรียน"><span class="avatar-fallback">รูป</span><img class="student-avatar" data-photo-student="${escapeHtml(student.id)}" alt="รูป ${escapeHtml(student.firstName)}" loading="lazy" /></button>`
+      : `<button class="avatar-button" data-view-student="${escapeHtml(student.id)}" title="ดูข้อมูลนักเรียน"><span class="avatar-placeholder">${escapeHtml((student.firstName || 'น').slice(0, 1))}</span></button>`}</td>${columns.map(key => {
       const value = key === 'classroom' ? (classrooms.find(room => room.id === student.classroomId)?.name || student.classroomName || '-') : student[key];
       return `<td>${escapeHtml(value || '-')}</td>`;
     }).join('')}<td><div class="table-actions"><button class="mini-action" data-edit-student="${escapeHtml(student.id)}">แก้ไข</button><button class="mini-action delete" data-delete-student="${escapeHtml(student.id)}">ลบ</button></div></td></tr>`).join('');
+    loadVisibleAvatars();
     $('#table-empty').classList.toggle('hidden', filtered.length > 0);
     $('.table-wrap').classList.toggle('hidden', filtered.length === 0);
     $('#table-range').textContent = filtered.length ? `แสดง ${start + 1}–${Math.min(start + rows.length, filtered.length)} จาก ${filtered.length} รายการ` : 'แสดง 0 รายการ';
@@ -296,7 +335,22 @@
     $('#student-firstname').value = student?.firstName || '';
     $('#student-lastname').value = student?.lastName || '';
     $('#student-nickname').value = student?.nickname || '';
+    pendingPhotoBase64 = '';
+    pendingPhotoMimeType = '';
+    editingPhotoFileId = student?.photoFileId || '';
+    removeExistingPhoto = false;
+    $('#student-photo-file').value = '';
+    $('#student-camera-file').value = '';
+    setPhotoEditorPreview('', student?.photoFileId ? 'กำลังโหลดรูปภาพเดิม…' : 'ยังไม่ได้เลือกรูปภาพ');
+    $('#remove-photo-button').classList.toggle('hidden', !student?.photoFileId);
     showModal('student-modal');
+    if (student?.photoFileId) {
+      getPhotoData(student).then(dataUrl => {
+        if ($('#student-id').value !== student.id || pendingPhotoBase64 || removeExistingPhoto) return;
+        if (dataUrl) setPhotoEditorPreview(dataUrl, 'รูปภาพปัจจุบัน');
+        else setPhotoEditorPreview('', 'ไม่พบไฟล์รูปเดิม สามารถเลือกรูปใหม่ได้');
+      }).catch(error => setPhotoEditorPreview('', 'โหลดรูปภาพไม่สำเร็จ: ' + error.message));
+    }
     $('#student-number').focus();
   }
 
@@ -322,9 +376,9 @@
   async function saveStudent(event) {
     event.preventDefault();
     const button = $('#save-student-button');
-    const id = $('#student-id').value;
+    const originalStudentId = $('#student-id').value;
     const payload = {
-      id,
+      id: originalStudentId,
       classroomId: $('#student-classroom').value,
       number: $('#student-number').value.trim(),
       firstName: $('#student-firstname').value.trim(),
@@ -337,9 +391,46 @@
       return;
     }
     try {
-      await runMutation(button, id ? 'updateStudent' : 'createStudent', payload, id ? 'แก้ไขข้อมูลนักเรียนเรียบร้อย' : 'เพิ่มนักเรียนเรียบร้อย');
+      const result = await runMutation(button, originalStudentId ? 'updateStudent' : 'createStudent', payload,
+        originalStudentId ? 'แก้ไขข้อมูลนักเรียนเรียบร้อย' : 'เพิ่มนักเรียนเรียบร้อย');
+      const savedId = originalStudentId || result.id;
+      if (!savedId) throw new Error('บันทึกข้อมูลแล้ว แต่ไม่พบรหัสนักเรียนสำหรับผูกรูปภาพ');
+      if (!originalStudentId) {
+        // Lock in the new record ID so retrying a failed photo upload cannot create a duplicate student.
+        $('#student-id').value = savedId;
+        $('#student-modal-title').textContent = 'แก้ไขข้อมูลนักเรียน';
+      }
+      if (pendingPhotoBase64) {
+        button.disabled = true;
+        button.textContent = 'กำลังอัปโหลดรูปภาพ…';
+        const upload = await apiPost('uploadStudentPhoto', {
+          id: savedId, base64: pendingPhotoBase64, mimeType: pendingPhotoMimeType
+        });
+        if (!upload?.ok) throw new Error(upload?.message || 'อัปโหลดรูปภาพไม่สำเร็จ');
+        photoCache.clear();
+        await refreshData(false);
+        toast(upload.message || 'บันทึกรูปภาพเรียบร้อย');
+      } else if (removeExistingPhoto && editingPhotoFileId) {
+        button.disabled = true;
+        button.textContent = 'กำลังลบรูปภาพ…';
+        const removal = await apiPost('deleteStudentPhoto', { id: savedId });
+        if (!removal?.ok) throw new Error(removal?.message || 'นำรูปภาพออกไม่สำเร็จ');
+        photoCache.clear();
+        await refreshData(false);
+        toast(removal.message || 'นำรูปภาพออกแล้ว');
+      }
       closeModal('student-modal');
-    } catch (error) { $('#student-form-error').textContent = error.message; }
+      pendingPhotoBase64 = '';
+      pendingPhotoMimeType = '';
+      editingPhotoFileId = '';
+      removeExistingPhoto = false;
+      renderStudents();
+    } catch (error) {
+      $('#student-form-error').textContent = error.message;
+    } finally {
+      button.disabled = false;
+      button.textContent = 'บันทึกข้อมูล';
+    }
   }
 
   async function saveClassroom(event) {
@@ -385,14 +476,270 @@
     catch { toast('เบราว์เซอร์ไม่อนุญาตให้คัดลอก กรุณาใช้ HTTPS', 'error'); }
   }
 
-  function printList() {
+  async function printList() {
     const columns = selectedColumns();
     const rows = filteredStudents();
     const roomNames = classrooms.filter(room => selectedRooms.has(room.id)).map(room => room.name).join(', ') || 'ไม่ได้เลือกห้องเรียน';
-    const th = columns.map(key => `<th>${LABELS[key]}</th>`).join('');
-    const body = rows.map(student => `<tr>${columns.map(key => `<td>${escapeHtml(key === 'classroom' ? (classrooms.find(room => room.id === student.classroomId)?.name || '') : student[key] || '')}</td>`).join('')}</tr>`).join('');
+    const th = '<th>รูป</th>' + columns.map(key => `<th>${LABELS[key]}</th>`).join('');
+    toast('กำลังเตรียมรูปภาพสำหรับพิมพ์…');
+    const photoMap = new Map();
+    for (let i = 0; i < rows.length; i += 4) {
+      const batch = rows.slice(i, i + 4);
+      const loaded = await Promise.all(batch.map(async student => [student.id, await getPhotoData(student).catch(() => '')]));
+      loaded.forEach(([id, data]) => photoMap.set(id, data));
+    }
+    const body = rows.map(student => {
+      const photo = photoMap.get(student.id);
+      const photoCell = photo ? `<td class="print-photo-cell"><img src="${photo}" alt="" /></td>` : '<td class="print-photo-cell">—</td>';
+      return `<tr>${photoCell}${columns.map(key => `<td>${escapeHtml(key === 'classroom' ? (classrooms.find(room => room.id === student.classroomId)?.name || '') : student[key] || '')}</td>`).join('')}</tr>`;
+    }).join('');
     $('#print-area').innerHTML = `<h1>รายชื่อนักเรียน</h1><p>โรงเรียนวัดแคทราย(บุญประชาสรรค์) · ห้องเรียน: ${escapeHtml(roomNames)} · จำนวน ${rows.length} คน · พิมพ์วันที่ ${nowText()}</p><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table><div class="print-footer">จัดทำโดย Student List Manager · NtnKsai</div>`;
+    const images = $$('img', $('#print-area'));
+    await Promise.all(images.map(img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = img.onerror = resolve; })));
     window.print();
+  }
+
+  function photoPlaceholderData() {
+    return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="100" viewBox="0 0 80 100"><rect width="80" height="100" rx="12" fill="#eaf0f7"/><circle cx="40" cy="34" r="15" fill="#a9bad0"/><path d="M13 91c2-20 14-31 27-31s25 11 27 31" fill="#a9bad0"/></svg>');
+  }
+
+  function enqueuePhotoTask(task) {
+    return new Promise((resolve, reject) => {
+      photoTaskQueue.push({ task, resolve, reject });
+      pumpPhotoQueue();
+    });
+  }
+
+  function pumpPhotoQueue() {
+    while (activePhotoTasks < 4 && photoTaskQueue.length) {
+      const item = photoTaskQueue.shift();
+      activePhotoTasks++;
+      Promise.resolve().then(item.task).then(item.resolve, item.reject).finally(() => {
+        activePhotoTasks--;
+        pumpPhotoQueue();
+      });
+    }
+  }
+
+  function requestPhotoTicket(student) {
+    return new Promise((resolve, reject) => {
+      photoTicketQueue.push({ student, resolve, reject });
+      if (!photoTicketFlushScheduled) {
+        photoTicketFlushScheduled = true;
+        window.setTimeout(flushPhotoTicketQueue, 0);
+      }
+    });
+  }
+
+  async function flushPhotoTicketQueue() {
+    photoTicketFlushScheduled = false;
+    const batch = photoTicketQueue.splice(0, 100);
+    if (!batch.length) return;
+    try {
+      const response = await apiPost('issuePhotoTickets', { ids: batch.map(item => item.student.id) });
+      if (!response?.ok) throw new Error(response?.message || 'ขอรหัสเรียกดูรูปภาพไม่สำเร็จ');
+      const ticketMap = new Map((response.tickets || []).map(item => [item.id, item.ticket]));
+      batch.forEach(item => {
+        const ticket = ticketMap.get(item.student.id);
+        if (ticket) item.resolve(ticket);
+        else item.resolve('');
+      });
+    } catch (error) { batch.forEach(item => item.reject(error)); }
+    if (photoTicketQueue.length && !photoTicketFlushScheduled) {
+      photoTicketFlushScheduled = true;
+      window.setTimeout(flushPhotoTicketQueue, 0);
+    }
+  }
+
+  async function getPhotoData(student) {
+    if (!student?.photoFileId) return '';
+    const key = student.photoFileId;
+    if (photoCache.has(key)) return photoCache.get(key);
+    if (photoPending.has(key)) return photoPending.get(key);
+    const requestEpoch = sessionEpoch;
+    const promise = (async () => {
+      const ticket = await requestPhotoTicket(student);
+      if (!ticket || requestEpoch !== sessionEpoch) return '';
+      return enqueuePhotoTask(async () => {
+        const response = await apiGetPhoto(ticket);
+        if (!response?.ok || !response.base64 || requestEpoch !== sessionEpoch) return '';
+        const dataUrl = `data:${response.mimeType};base64,${response.base64}`;
+        photoCache.set(key, dataUrl);
+        return dataUrl;
+      });
+    })();
+    photoPending.set(key, promise);
+    try { return await promise; }
+    finally { photoPending.delete(key); }
+  }
+
+  async function loadAvatar(image) {
+    if (image.dataset.loaded === '1' || image.dataset.loading === '1') return;
+    const student = students.find(item => item.id === image.dataset.photoStudent);
+    if (!student?.photoFileId) return;
+    image.dataset.loading = '1';
+    try {
+      const dataUrl = await getPhotoData(student);
+      if (dataUrl && image.isConnected) {
+        image.src = dataUrl;
+        image.dataset.loaded = '1';
+        image.classList.add('loaded');
+        image.parentElement?.querySelector('.avatar-fallback')?.classList.add('hidden');
+      }
+    } catch (error) {
+      image.title = 'โหลดรูปภาพไม่สำเร็จ';
+    } finally { delete image.dataset.loading; }
+  }
+
+  function loadVisibleAvatars() {
+    const images = $$('.student-avatar[data-photo-student]');
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            loadAvatar(entry.target);
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { root: $('.table-wrap'), rootMargin: '120px' });
+      images.forEach(image => observer.observe(image));
+    } else images.forEach(loadAvatar);
+  }
+
+  function setPhotoEditorPreview(dataUrl, status) {
+    const image = $('#student-photo-preview');
+    const placeholder = $('#student-photo-placeholder');
+    image.classList.toggle('hidden', !dataUrl);
+    placeholder.classList.toggle('hidden', Boolean(dataUrl));
+    if (dataUrl) image.src = dataUrl;
+    else image.removeAttribute('src');
+    $('#photo-upload-status').textContent = status || '';
+    $('#remove-photo-button').classList.toggle('hidden', !(editingPhotoFileId || pendingPhotoBase64));
+  }
+
+  function optimizeImageFile(file) {
+    return new Promise((resolve, reject) => {
+      if (!file || !file.type.startsWith('image/')) return reject(new Error('กรุณาเลือกไฟล์รูปภาพ'));
+      if (file.size > 12 * 1024 * 1024) return reject(new Error('ไฟล์ต้นฉบับใหญ่เกิน 12 MB'));
+      const objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = async () => {
+        try {
+          const maxW = 400, maxH = 533;
+          const scale = Math.min(1, maxW / image.width, maxH / image.height);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          const ctx = canvas.getContext('2d', { alpha: false });
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(objectUrl);
+          const candidates = ['image/webp', 'image/jpeg'];
+          let blob = null;
+          for (const mime of candidates) {
+            for (const quality of [0.82, 0.72, 0.62, 0.52]) {
+              blob = await new Promise(resolveBlob => canvas.toBlob(resolveBlob, mime, quality));
+              if (blob && blob.size <= 230 * 1024) break;
+            }
+            if (blob && blob.size <= 230 * 1024) break;
+          }
+          if (!blob || blob.size > 250 * 1024) return reject(new Error('ไม่สามารถลดขนาดรูปภาพให้ต่ำกว่า 250 KB ได้ กรุณาเลือกรูปที่มีขนาดเล็กลง'));
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = String(reader.result || '');
+            resolve({ base64: dataUrl.split(',')[1] || '', mimeType: blob.type || 'image/jpeg', dataUrl, size: blob.size });
+          };
+          reader.onerror = () => reject(new Error('อ่านไฟล์รูปภาพไม่สำเร็จ'));
+          reader.readAsDataURL(blob);
+        } catch (error) { URL.revokeObjectURL(objectUrl); reject(error); }
+      };
+      image.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('เปิดไฟล์รูปภาพนี้ไม่ได้')); };
+      image.src = objectUrl;
+    });
+  }
+
+  async function onPhotoFileSelected(file) {
+    if (!file) return;
+    $('#photo-upload-status').textContent = 'กำลังย่อขนาดรูปภาพ…';
+    try {
+      const optimized = await optimizeImageFile(file);
+      pendingPhotoBase64 = optimized.base64;
+      pendingPhotoMimeType = optimized.mimeType;
+      removeExistingPhoto = false;
+      setPhotoEditorPreview(optimized.dataUrl, `พร้อมบันทึก · ${(optimized.size / 1024).toFixed(0)} KB`);
+    } catch (error) {
+      setPhotoEditorPreview('', error.message);
+      toast(error.message, 'error');
+    }
+  }
+
+  function removePhotoFromEditor() {
+    if (pendingPhotoBase64 || editingPhotoFileId) {
+      pendingPhotoBase64 = '';
+      pendingPhotoMimeType = '';
+      removeExistingPhoto = Boolean(editingPhotoFileId);
+      setPhotoEditorPreview('', removeExistingPhoto ? 'เลือกลบรูปเดิมเมื่อกดบันทึก' : 'นำรูปที่เลือกออกแล้ว');
+      $('#remove-photo-button').classList.add('hidden');
+    }
+  }
+
+  async function openStudentDetails(student) {
+    detailStudentId = student.id;
+    const roomName = classrooms.find(room => room.id === student.classroomId)?.name || '-';
+    $('#student-details-name').textContent = `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'ข้อมูลนักเรียน';
+    $('#student-details-fields').innerHTML = [
+      ['ห้องเรียน', roomName], ['เลขที่', student.number], ['ชื่อ', student.firstName],
+      ['นามสกุล', student.lastName], ['ชื่อเล่น', student.nickname]
+    ].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value || '-')}</dd></div>`).join('');
+    const image = $('#student-details-photo');
+    const empty = $('#student-details-photo-empty');
+    image.classList.add('hidden');
+    empty.classList.remove('hidden');
+    empty.textContent = student.photoFileId ? 'กำลังโหลดรูปภาพ…' : 'ยังไม่มีรูปภาพ';
+    showModal('student-details-modal');
+    if (student.photoFileId) {
+      try {
+        const dataUrl = await getPhotoData(student);
+        if (detailStudentId !== student.id) return;
+        if (dataUrl) { image.src = dataUrl; image.classList.remove('hidden'); empty.classList.add('hidden'); }
+        else empty.textContent = 'ไม่พบไฟล์รูปภาพ';
+      } catch (error) { empty.textContent = 'โหลดรูปภาพไม่สำเร็จ'; }
+    }
+  }
+
+  async function runPhotoAudit() {
+    const button = $('#audit-photos-button');
+    button.disabled = true;
+    button.textContent = 'กำลังตรวจสอบ…';
+    $('#photo-audit-status').textContent = 'กำลังตรวจสอบข้อมูลใน Google Sheets และไฟล์ใน Google Drive…';
+    $('#photo-audit-results').classList.add('hidden');
+    try {
+      const result = await apiGet('auditPhotos');
+      if (!result?.ok) throw new Error(result?.message || 'ตรวจสอบรูปภาพไม่สำเร็จ');
+      const counts = result.counts || {};
+      const section = (title, items, kind, emptyText) => `<section class="audit-list audit-${kind}"><h3>${title} (${items.length})</h3>${items.length ? `<ul>${items.slice(0, 30).map(item => `<li>${escapeHtml(item.classroomName || '')} ${escapeHtml(item.number || '')} ${escapeHtml([item.firstName, item.lastName].filter(Boolean).join(' '))} ${item.name ? '· ' + escapeHtml(item.name) : ''}</li>`).join('')}</ul>${items.length > 30 ? `<small>แสดง 30 รายการแรก จากทั้งหมด ${items.length}</small>` : ''}` : `<p>${emptyText}</p>`}</section>`;
+      const html = `<div class="audit-summary"><div><strong>${result.totalStudents}</strong><span>นักเรียน</span></div><div><strong>${result.totalFiles}</strong><span>ไฟล์ใน Drive</span></div><div><strong>${counts.studentsWithoutPhoto || 0}</strong><span>ยังไม่มีรูป</span></div><div><strong>${counts.missingReferences || 0}</strong><span>ไฟล์หาย</span></div><div><strong>${counts.orphanPhotos || 0}</strong><span>รูปกำพร้า</span></div></div>` +
+        section('นักเรียนที่ยังไม่มีรูป', result.studentsWithoutPhoto || [], 'none', 'นักเรียนทุกคนมีรูปภาพแล้ว') +
+        section('ข้อมูลอ้างอิงรูปที่หายไป', result.missingReferences || [], 'missing', 'ไม่พบรายการที่อ้างอิงไฟล์หาย') +
+        section('รูปภาพใน Drive ที่ไม่มีข้อมูลอ้างอิง', result.orphanPhotos || [], 'orphan', 'ไม่พบรูปภาพที่ไม่มีข้อมูลอ้างอิง') +
+        ((result.orphanPhotos || []).length ? '<button type="button" class="button button-danger button-small" id="cleanup-orphan-photos">ย้ายรูปกำพร้าไปถังขยะ</button>' : '');
+      $('#photo-audit-results').innerHTML = html;
+      $('#photo-audit-results').classList.remove('hidden');
+      $('#photo-audit-status').textContent = `ตรวจสอบล่าสุด ${new Date(result.scannedAt).toLocaleString('th-TH')}`;
+      $('#cleanup-orphan-photos')?.addEventListener('click', async () => {
+        if (!window.confirm(`ยืนยันย้ายรูปภาพที่ไม่มีข้อมูลอ้างอิง ${result.orphanPhotos.length} ไฟล์ไปถังขยะหรือไม่?`)) return;
+        try {
+          const cleanup = await apiPost('cleanupOrphanPhotos');
+          if (!cleanup?.ok) throw new Error(cleanup?.message || 'ลบรูปกำพร้าไม่สำเร็จ');
+          toast(cleanup.message || 'ย้ายรูปภาพไปถังขยะแล้ว');
+          await runPhotoAudit();
+        } catch (error) { toast(error.message, 'error'); }
+      });
+    } catch (error) {
+      $('#photo-audit-status').textContent = error.message;
+      toast(error.message, 'error');
+    } finally { button.disabled = false; button.textContent = 'ตรวจสอบรูปภาพ'; }
   }
 
   function parseCsv(text) {
@@ -454,10 +801,22 @@
     $('#menu-toggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
     $('#student-form').addEventListener('submit', saveStudent);
     $('#classroom-form').addEventListener('submit', saveClassroom);
+    $('#choose-photo-button').addEventListener('click', () => $('#student-photo-file').click());
+    $('#take-photo-button').addEventListener('click', () => $('#student-camera-file').click());
+    $('#student-photo-file').addEventListener('change', event => { onPhotoFileSelected(event.target.files?.[0]); event.target.value = ''; });
+    $('#student-camera-file').addEventListener('change', event => { onPhotoFileSelected(event.target.files?.[0]); event.target.value = ''; });
+    $('#remove-photo-button').addEventListener('click', removePhotoFromEditor);
+    $('#audit-photos-button').addEventListener('click', runPhotoAudit);
+    $('#edit-from-details-button').addEventListener('click', () => {
+      const student = students.find(item => item.id === detailStudentId);
+      closeModal('student-details-modal');
+      if (student) openStudentModal(student);
+    });
     $('#add-classroom-button').addEventListener('click', () => openClassroomModal());
     $$('[data-close-modal]').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.closeModal)));
     $$('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(backdrop.id); }));
     $('#student-search').addEventListener('input', () => { currentPage = 1; renderStudents(); });
+    $('#filter-photo-only').addEventListener('change', event => { filterPhotoOnly = event.target.checked; currentPage = 1; renderStudents(); });
     $('#room-filter-list').addEventListener('change', event => { if (event.target.matches('input[type="checkbox"]')) { event.target.checked ? selectedRooms.add(event.target.value) : selectedRooms.delete(event.target.value); currentPage = 1; renderRoomFilters(); renderStudents(); } });
     $('#select-all-rooms').addEventListener('click', () => { selectedRooms = new Set(classrooms.map(room => room.id)); renderRoomFilters(); renderStudents(); });
     $('#clear-rooms').addEventListener('click', () => { selectedRooms.clear(); renderRoomFilters(); renderStudents(); });
@@ -468,7 +827,7 @@
     $('#next-page').addEventListener('click', () => { currentPage++; renderStudents(); });
     $('#export-csv-button').addEventListener('click', exportCsv);
     $('#copy-list-button').addEventListener('click', copyList);
-    $('#print-list-button').addEventListener('click', printList);
+    $('#print-list-button').addEventListener('click', () => printList().catch(error => toast(error.message, 'error')));
     $('#import-csv-button').addEventListener('click', () => $('#csv-file').click());
     $('#csv-file').addEventListener('change', async event => { const file = event.target.files?.[0]; if (!file) return; try { await importCsvFile(file); } catch (error) { toast(error.message, 'error'); } finally { event.target.value = ''; } });
     $('#refresh-data-button').addEventListener('click', async () => { const button = $('#refresh-data-button'); button.disabled = true; try { await refreshData(); } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; } });
@@ -482,8 +841,10 @@
     $('#students-tbody').addEventListener('click', event => {
       const edit = event.target.closest('[data-edit-student]');
       const del = event.target.closest('[data-delete-student]');
+      const view = event.target.closest('[data-view-student]');
       if (edit) { const student = students.find(item => item.id === edit.dataset.editStudent); if (student) openStudentModal(student); }
-      if (del) { const student = students.find(item => item.id === del.dataset.deleteStudent); if (student) askDelete(`ต้องการลบ ${student.firstName} ${student.lastName || ''} ใช่หรือไม่?`, async () => { const result = await apiPost('deleteStudent', { id: student.id }); if (!result.ok) throw new Error(result.message); await refreshData(false); toast('ลบนักเรียนเรียบร้อย'); }); }
+      if (view) { const student = students.find(item => item.id === view.dataset.viewStudent); if (student) openStudentDetails(student); }
+      if (del) { const student = students.find(item => item.id === del.dataset.deleteStudent); if (student) askDelete(`ต้องการลบ ${student.firstName} ${student.lastName || ''} ใช่หรือไม่? (ระบบจะย้ายไฟล์รูปประจำตัวไปถังขยะด้วย)`, async () => { const result = await apiPost('deleteStudent', { id: student.id }); if (!result.ok) throw new Error(result.message); photoCache.clear(); await refreshData(false); toast(result.message || 'ลบนักเรียนเรียบร้อย'); }); }
     });
     $('#confirm-delete-button').addEventListener('click', async event => {
       if (!pendingDelete) return;
@@ -494,7 +855,7 @@
       finally { button.disabled = false; pendingDelete = null; }
     });
     $('#logout-button').addEventListener('click', () => {
-      idToken = ''; currentUser = ''; students = []; classrooms = [];
+      idToken = ''; currentUser = ''; students = []; classrooms = []; sessionEpoch++; photoCache.clear(); photoPending.clear();
       if (window.google?.accounts?.id) window.google.accounts.id.disableAutoSelect();
       $('#app-shell').classList.add('hidden'); $('#login-screen').classList.remove('hidden');
       setLoginStatus('ออกจากระบบแล้ว สามารถเข้าสู่ระบบด้วยบัญชี Google ได้อีกครั้ง');
